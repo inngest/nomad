@@ -239,9 +239,7 @@ type copier struct {
 }
 
 func (c *copier) Write(p []byte) (n int, err error) {
-	if *c.read == 0 {
-		atomic.AddInt64(c.read, int64(len(p)))
-	}
+	atomic.AddInt64(c.read, int64(len(p)))
 	return c.writer.Write(p)
 }
 
