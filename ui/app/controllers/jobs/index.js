@@ -242,11 +242,4 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
   setFacetQueryParam(queryParam, selection) {
     this.set(queryParam, serialize(selection));
   }
-
-  @action
-  gotoJob(job) {
-    this.transitionToRoute('jobs.job', job.get('plainId'), {
-      queryParams: { namespace: job.get('namespace.name') },
-    });
-  }
 }
