@@ -13,10 +13,10 @@ import classic from 'ember-classic-decorator';
 
 @classic
 export default class ClientsController extends Controller.extend(
-    SortableFactory(['id', 'name', 'jobStatus']),
-    Searchable,
-    WithNamespaceResetting
-  ) {
+  SortableFactory(['id', 'name', 'jobStatus']),
+  Searchable,
+  WithNamespaceResetting
+) {
   queryParams = [
     {
       currentPage: 'page',
@@ -64,9 +64,7 @@ export default class ClientsController extends Controller.extend(
 
   @computed('store')
   get allNodes() {
-    return this.store.peekAll('node').length
-      ? this.store.peekAll('node')
-      : this.store.findAll('node');
+    return this.store.peekAll('node');
   }
 
   @computed('allNodes', 'jobClientStatus.byNode')
