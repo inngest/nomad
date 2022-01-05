@@ -28,7 +28,6 @@ module('Integration | Component | job-page/parts/task-groups', function(hooks) {
         job,
         sortProperty: 'name',
         sortDescending: true,
-        gotoTaskGroup: () => {},
       },
       options
     );
@@ -50,7 +49,7 @@ module('Integration | Component | job-page/parts/task-groups', function(hooks) {
         @job={{this.job}}
         @sortProperty={{this.sortProperty}}
         @sortDescending={{this.sortDescending}}
-        @gotoTaskGroup={{this.gotoTaskGroup}} />
+      />
     `);
 
     assert.equal(
