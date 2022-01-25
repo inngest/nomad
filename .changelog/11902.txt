@@ -1,0 +1,4 @@
+```release-note:bug
+template: Fixed a bug where client template configuration that did not include any
+of the new options could result in the entire struct getting set to nil.
+```
