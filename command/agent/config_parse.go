@@ -259,8 +259,4 @@ func finalizeClientTemplateConfig(config *Config) {
 	if config.Client.TemplateConfig.VaultRetry.IsEmpty() {
 		config.Client.TemplateConfig.VaultRetry = nil
 	}
-
-	if config.Client.TemplateConfig.IsEmpty() {
-		config.Client.TemplateConfig = nil
-	}
 }
