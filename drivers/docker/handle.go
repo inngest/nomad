@@ -20,6 +20,29 @@ import (
 	"golang.org/x/net/context"
 )
 
+// VisibleTaskHandle exposes taskHandle outside of the package, which allows
+// other drivers or functionality to hook into taskHandle.  We do this instead
+// of changing the taskHandle struct to make merging upstream easy.
+type VisibleTaskHandle struct {
+	*taskHandle
+}
+
+func (t *VisibleTaskHandle) ContainerID() string {
+	return t.containerID
+}
+
+func (t *VisibleTaskHandle) Client() *docker.Client {
+	return t.client
+}
+
+func (t *VisibleTaskHandle) Task() *drivers.TaskConfig {
+	return t.task
+}
+
+func (t *VisibleTaskHandle) Net() *drivers.DriverNetwork {
+	return t.net
+}
+
 type taskHandle struct {
 	client                  *docker.Client
 	waitClient              *docker.Client
