@@ -1,6 +1,7 @@
 package docklog
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math/rand"
@@ -148,6 +149,8 @@ func (d *dockerLogger) Start(opts *StartOpts) error {
 				Stdout:       true,
 				Stderr:       true,
 
+				Timestamps: false,
+
 				// When running in TTY, we must use a raw terminal.
 				// If not, we set RawTerminal to false to allow docker client
 				// to interpret special stdout/stderr messages
@@ -155,9 +158,18 @@ func (d *dockerLogger) Start(opts *StartOpts) error {
 			}
 
 			err := client.Logs(logOpts)
+
 			// If we've been reading logs and the container is done we can safely break
-			// the loop
-			if containerDoneCtx.Err() != nil && d.read != 0 {
+			// the loop.
+			//
+			// NOTE: This isn't guaranteed to be closed when the docker container exits;
+			// the log stream will likely have stopped following before the nomad task
+			// signals to the log driver that the container has exited.
+			//
+			// Therefore, we're likely to loop again and read the logs once more.  If
+			// the loop retries _in the same second that the container exited_, we will
+			// receive duplicate logs for the last second of the container.
+			if containerDoneCtx.Err() != nil && d.read > 2 {
 				return
 			} else if ctx.Err() != nil {
 				// If context is terminated then we can safely break the loop
@@ -174,6 +186,9 @@ func (d *dockerLogger) Start(opts *StartOpts) error {
 				time.Sleep(time.Duration(backoff) * time.Second)
 			}
 
+			// As explained above, we may be here even if the container has exited as
+			// containerDoneCtx isn't guaranteed to be instant.  This means we will loop
+			// and return dupe logs for the last second of the container's life.
 			sinceTime = time.Now()
 
 			_, err = client.InspectContainerWithOptions(docker.InspectContainerOptions{
@@ -230,16 +245,54 @@ func (d *dockerLogger) openStreams(ctx context.Context, opts *StartOpts) (stdout
 // streamCopier copies into the given writer and sets a flag indicating that
 // we have read some logs.
 func (d *dockerLogger) streamCopier(to io.WriteCloser) io.WriteCloser {
-	return &copier{read: &d.read, writer: to}
+	return &copier{read: &d.read, writer: to, logger: d.logger}
 }
 
 type copier struct {
+	logger hclog.Logger
 	read   *int64
 	writer io.WriteCloser
+
+	lastRead []byte
 }
 
 func (c *copier) Write(p []byte) (n int, err error) {
+	// XXX: There are race conditions between nomad and reading docker outputs:
+	//
+	// When a container exits we may not have read all of the logs.  How do we know
+	// when we've read all of the logs?
+	//
+	// Ideally we'd use an incremental JSON parser, assuming that all output to stdoud
+	// must be in JSON format.  An incremental parser would return whether the currently
+	// read JSON is valid;  if it's valid we can assume that we've read everything.
+	//
+	// It would be great to create a sream parser which discards all data except for
+	// the internal JSON-decoding state, eg. which position / data structure we're in,
+	// and then we could capture whether the state is valid.
+	if len(c.lastRead) > 0 {
+		// We may be reading duplicate logs as per the comment on line 156;
+		// the client may request logs from a killed container twice in the same
+		// second.
+		//
+		// This does not fix everythign:  Write() is called for each log line
+		// within the same second.  This may mean that > 1 log line is repeated,
+		// therefore lastRead will never prevet dupes for > 1 repeated log.
+		//
+		// To fix, for our use case we can:
+		//
+		// 1. Discard log streaming and copy the entire log file from the docker's
+		//    log output to the writer once the container has closed
+		// 2. Request timestamps, and store all timestamps we've seen in the last second
+		//    in a buffer
+		if len(c.lastRead) == len(p) && bytes.Equal(c.lastRead, p) {
+			return len(p), nil
+		}
+	}
+
 	atomic.AddInt64(c.read, int64(len(p)))
+	c.lastRead = make([]byte, len(p))
+	copy(c.lastRead, p)
+
 	return c.writer.Write(p)
 }
 
