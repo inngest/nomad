@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -137,6 +138,16 @@ func NewDockerDriver(ctx context.Context, logger hclog.Logger) drivers.DriverPlu
 		ctx:     ctx,
 		logger:  logger,
 	}
+}
+
+// GetDockerHandle allows us to retrieve the VisibleTaskHandle, exposing container specifics
+// to our metricdriver.
+func (d *Driver) GetDockerHandle(handle *drivers.TaskHandle) (*VisibleTaskHandle, bool) {
+	th, ok := d.tasks.Get(handle.Config.ID)
+	if !ok {
+		return nil, false
+	}
+	return &VisibleTaskHandle{taskHandle: th}, true
 }
 
 func (d *Driver) reattachToDockerLogger(reattachConfig *pstructs.ReattachConfig) (docklog.DockerLogger, *plugin.Client, error) {
@@ -1149,6 +1160,11 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	hostConfig.PortBindings = ports.publishedPorts
 	config.ExposedPorts = ports.exposedPorts
 
+	argv, err := base64.RawStdEncoding.DecodeString(task.Env["NOMAD_META___argv"])
+	if err != nil {
+		return c, fmt.Errorf("error decoding argv: %w", err)
+	}
+
 	// If the user specified a custom command to run, we'll inject it here.
 	if driverConfig.Command != "" {
 		// Validate command
@@ -1165,6 +1181,9 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	} else if len(driverConfig.Args) != 0 {
 		config.Cmd = driverConfig.Args
 	}
+
+	// Add our base64 decoded argv.
+	config.Cmd = append(config.Cmd, string(argv))
 
 	if len(driverConfig.Labels) > 0 {
 		config.Labels = driverConfig.Labels
@@ -1206,7 +1225,15 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	logger.Debug("applied labels on the container", "labels", config.Labels)
 
 	config.Env = task.EnvList()
+	env := []string{}
+	for _, e := range config.Env {
+		if strings.HasPrefix(e, "NOMAD_") || strings.HasPrefix(e, "CONSUL_") || strings.HasPrefix(e, "VAULT_") {
+			continue
+		}
+		env = append(env, e)
+	}
 
+	config.Env = env
 	containerName := fmt.Sprintf("%s-%s", strings.ReplaceAll(task.Name, "/", "_"), task.AllocID)
 	logger.Debug("setting container name", "container_name", containerName)
 
@@ -1452,9 +1479,15 @@ func (d *Driver) DestroyTask(taskID string, force bool) error {
 		}
 
 		if h.removeContainerOnExit {
-			if err := h.client.RemoveContainer(docker.RemoveContainerOptions{ID: h.containerID, RemoveVolumes: true, Force: true}); err != nil {
-				h.logger.Error("error removing container", "error", err)
-			}
+			// Wait beyond the grace period for the logs so that anything polling for log FIFOs
+			// can inspect the container once the grace period is over.  Nomad has a fifo close
+			// race condition that this helps alleviate.
+			go func() {
+				<-time.After(d.config.containerLogGracePeriodDuration * 2)
+				if err := h.client.RemoveContainer(docker.RemoveContainerOptions{ID: h.containerID, RemoveVolumes: true, Force: true}); err != nil {
+					h.logger.Error("error removing container", "error", err)
+				}
+			}()
 		} else {
 			h.logger.Debug("not removing container due to config")
 		}
@@ -1465,7 +1498,13 @@ func (d *Driver) DestroyTask(taskID string, force bool) error {
 			"error", err)
 	}
 
-	d.tasks.Delete(taskID)
+	go func() {
+		// We need to delay this by the grace period plus a buffer such that
+		// the task still exists as the log driver is shutting down.  This allows
+		// any drivers to grab the task handle after the buffer period wait.
+		<-time.After(d.config.containerLogGracePeriodDuration * 2)
+		d.tasks.Delete(taskID)
+	}()
 	return nil
 }
 

@@ -20,6 +20,31 @@ import (
 	"golang.org/x/net/context"
 )
 
+// VisibleTaskHandle exposes taskHandle outside of the package.
+// It allows our wrapping driver to see the container ID and task config,
+// without changing the taskHandle struct.  We use this struct instead of
+// changing taskHandle directly so that it's easy to pull upstream changes
+// in the future, as our diff is minor.
+type VisibleTaskHandle struct {
+	*taskHandle
+}
+
+func (t *VisibleTaskHandle) ContainerID() string {
+	return t.containerID
+}
+
+func (t *VisibleTaskHandle) Client() *docker.Client {
+	return t.client
+}
+
+func (t *VisibleTaskHandle) Task() *drivers.TaskConfig {
+	return t.task
+}
+
+func (t *VisibleTaskHandle) Net() *drivers.DriverNetwork {
+	return t.net
+}
+
 type taskHandle struct {
 	client                  *docker.Client
 	waitClient              *docker.Client
@@ -32,8 +57,8 @@ type taskHandle struct {
 	doneCh                  chan bool
 	waitCh                  chan struct{}
 	removeContainerOnExit   bool
-	containerLogGracePeriod time.Duration
 	net                     *drivers.DriverNetwork
+	containerLogGracePeriod time.Duration
 
 	exitResult     *drivers.ExitResult
 	exitResultLock sync.Mutex
